@@ -11,7 +11,7 @@ Heltec V4.3 переведён на MeshCore USB Companion `v1.18.0-81dbae5`.
 Для переключения существующего системного сервиса:
 
 ```sh
-sudo bash /home/andrey/meshtastic-telegram/install_meshcore_service.sh
+sudo bash /home/andrey/meshcore-telegram/install_meshcore_service.sh
 ```
 
 Имя сервиса остаётся `meshtastic-telegram`, токен, группа и файл состояния сохраняются из `bridge.env`. Drop-in `meshcore-systemd.conf` задаёт новый исполняемый файл и канал. При потере USB процесс завершается, а systemd перезапускает его. Проверка канала и ключа при запуске предотвращает отправку в неверную группу.
