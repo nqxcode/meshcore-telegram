@@ -183,20 +183,20 @@ def handle_message(interface, message, state, status_provider=status_text):
     if message.get("chat", {}).get("id") != bridge.CHAT_ID or message.get("from", {}).get("is_bot"):
         return
 
-    respond = lambda text: bridge.reply_to(message, text)
-
-    parts = message.get("text", "").split(maxsplit=1)
-    if not parts:
+    parsed = bridge.parse_message(message)
+    if parsed is None:
         return
 
-    command, _, target = parts[0].partition("@")
-    if target and command.startswith("/") and target.lower() != bridge.bot_username.lower():
-        return
-
+    command, parts = parsed
     if command not in ("/channels", "/channel"):
         bridge.handle_message(interface, message, state, status_provider)
         return
 
+    handle_channel_command(interface, message, state, command, parts)
+
+
+def handle_channel_command(interface, message, state, command, parts):
+    respond = lambda text: bridge.reply_to(message, text)
     if command == "/channels" or len(parts) == 1:
         respond(
             f"Текущий канал: {CHANNELS[interface.channel]}\n"

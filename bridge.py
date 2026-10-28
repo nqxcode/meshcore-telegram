@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import math
 import os
 import queue
 import time
@@ -64,6 +65,17 @@ def on_receive(packet, interface):
     if packet.get("from") == getattr(interface.myInfo, "my_node_num", None):
         return
 
+    if not remember_packet(packet):
+        return
+
+    sender = packet.get("fromId", "unknown")
+    try:
+        messages.put_nowait((sender, text))
+    except queue.Full:
+        log.warning("Очередь входящих сообщений заполнена; пакет пропущен")
+
+
+def remember_packet(packet):
     now = time.monotonic()
     while seen_packets and next(iter(seen_packets.values())) <= now - DEDUP_SECONDS:
         seen_packets.popitem(last=False)
@@ -71,17 +83,13 @@ def on_receive(packet, interface):
     packet_id = (packet.get("from"), packet.get("id"))
     if packet.get("id") is not None:
         if packet_id in seen_packets:
-            return
+            return False
 
         seen_packets[packet_id] = now
         if len(seen_packets) > 4096:
             seen_packets.popitem(last=False)
 
-    sender = packet.get("fromId", "unknown")
-    try:
-        messages.put_nowait((sender, text))
-    except queue.Full:
-        log.warning("Очередь входящих сообщений заполнена; пакет пропущен")
+    return True
 
 
 def save_state(state):
@@ -131,10 +139,7 @@ def status_text(interface):
     )
 
 
-def node_list_pages(nodes):
-    if not nodes:
-        return ["📡 Известные узлы: 0\n\nСписок пока пуст."]
-
+def node_entries(nodes):
     entries = []
     for node_id, node in nodes.items():
         user = node.get("user", {})
@@ -144,6 +149,10 @@ def node_list_pages(nodes):
         entries.append((name, identifier, short_name))
 
     entries.sort(key=lambda entry: (entry[0].casefold(), entry[1]))
+    return entries
+
+
+def group_node_entries(entries):
     groups = []
     current = []
     current_size = 0
@@ -161,6 +170,15 @@ def node_list_pages(nodes):
     if current:
         groups.append(current)
 
+    return groups
+
+
+def node_list_pages(nodes):
+    if not nodes:
+        return ["📡 Известные узлы: 0\n\nСписок пока пуст."]
+
+    entries = node_entries(nodes)
+    groups = group_node_entries(entries)
     pages = []
     for page_number, group in enumerate(groups, start=1):
         heading = f"📡 Известные узлы: {len(entries)}"
@@ -172,10 +190,8 @@ def node_list_pages(nodes):
     return pages
 
 
-def handle_message(interface, message, state, status_provider=status_text):
-    respond = partial(reply_to, message)
-    sender = message.get("from", {})
-    if sender.get("is_bot"):
+def parse_message(message):
+    if message.get("from", {}).get("is_bot"):
         return
 
     text = message.get("text", "")
@@ -187,29 +203,54 @@ def handle_message(interface, message, state, status_provider=status_text):
     if command.startswith("/") and target and target.lower() != bot_username.lower():
         return
 
+    return command, parts
+
+
+def handle_query(interface, command, chat, status_provider):
+    if command == "/status":
+        reply(status_provider(interface), chat_id=chat["id"])
+        return True
+
+    if command == "/nodes":
+        for page in node_list_pages(dict(interface.nodes or {})):
+            reply(page, chat_id=chat["id"])
+        return True
+
+    return False
+
+
+def outgoing_body(message, command, parts, respond):
+    if command != "/send":
+        return message.get("text", "").strip()
+
+    if len(parts) != 2:
+        respond("Использование: /send текст")
+        return None
+
+    return parts[1].strip()
+
+
+def handle_message(interface, message, state, status_provider=status_text):
+    parsed = parse_message(message)
+    if parsed is None:
+        return
+
+    command, parts = parsed
     chat = message.get("chat", {})
     if chat.get("id") != CHAT_ID:
         if chat.get("type") != "private" or command not in ("/status", "/nodes"):
             return
 
-    if command == "/status":
-        reply(status_provider(interface), chat_id=chat["id"])
+    if handle_query(interface, command, chat, status_provider):
         return
 
-    if command == "/nodes":
-        for page in node_list_pages(dict(interface.nodes or {})):
-            reply(page, chat_id=chat["id"])
-        return
+    respond = partial(reply_to, message)
+    body = outgoing_body(message, command, parts, respond)
+    if body is not None:
+        send_message(interface, body, message.get("from", {}), state, respond)
 
-    if command == "/send":
-        if len(parts) != 2 or not parts[1].strip():
-            respond("Использование: /send текст")
-            return
 
-        body = parts[1].strip()
-    else:
-        body = text.strip()
-
+def send_message(interface, body, sender, state, respond):
     payload = f"[TG {sender.get('first_name', 'Telegram')}] {body}"
     if len(payload.encode("utf-8")) > MAX_MESSAGE_BYTES:
         respond(f"Сообщение слишком длинное: максимум {MAX_MESSAGE_BYTES} байт UTF-8 вместе с префиксом отправителя.")
@@ -219,23 +260,8 @@ def handle_message(interface, message, state, status_provider=status_text):
         respond("Heltec отключён. Сообщение не отправлено.")
         return
 
-    now = time.time()
-    recent = {key: timestamp for key, timestamp in state.get("recent", {}).items()
-              if now - timestamp < OUTGOING_DEDUP_SECONDS}
-    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    if digest in recent:
-        respond("Этот текст уже отправлялся за последнюю секунду.")
+    if not reserve_send(body, state, respond):
         return
-
-    remaining = SEND_INTERVAL - (now - state.get("last_send", 0))
-    if remaining > 0:
-        respond(f"Ограничение частоты: повторите через {int(remaining) + 1} с.")
-        return
-
-    # Сохраняем попытку до обращения к радио: при неясном результате не повторяем её автоматически.
-    recent[digest] = now
-    state.update(last_send=now, recent=recent)
-    save_state(state)
 
     try:
         interface.sendText(payload, channelIndex=CHANNEL)
@@ -246,6 +272,28 @@ def handle_message(interface, message, state, status_provider=status_text):
 
     log.info("TG -> LoRa: %s", payload)
     respond(f"Передано в mesh-сеть:\n{payload}")
+
+
+def reserve_send(body, state, respond):
+    now = time.time()
+    recent = {key: timestamp for key, timestamp in state.get("recent", {}).items()
+              if now - timestamp < OUTGOING_DEDUP_SECONDS}
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    if digest in recent:
+        respond("Этот текст уже отправлялся за последнюю секунду.")
+        return False
+
+    last_send = state.get("last_send", now - SEND_INTERVAL)
+    remaining = SEND_INTERVAL - (now - last_send)
+    if remaining > 0:
+        respond(f"Ограничение частоты: повторите через {math.ceil(remaining)} с.")
+        return False
+
+    # Сохраняем попытку до обращения к радио: при неясном результате не повторяем её автоматически.
+    recent[digest] = now
+    state.update(last_send=now, recent=recent)
+    save_state(state)
+    return True
 
 
 def receive_telegram(interface, state, status_provider=status_text, message_handler=handle_message):
