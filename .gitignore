@@ -1,0 +1,36 @@
+# Виртуальные окружения Python
+.venv/
+.meshcore-venv/
+venv/
+
+# Кэш Python и инструментов тестирования
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Локальные настройки и секреты
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+/.aws/
+
+# Состояние моста и временный файл при сохранении
+/bridge-state.json
+/bridge-state.tmp
+
+# Резервные копии устройства, прошивки и ключи
+/migration/
+
+# Журналы и локальные артефакты
+*.log
+/graphify-out/
+.DS_Store
+*.swp
+*.swo
