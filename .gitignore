@@ -31,6 +31,10 @@ htmlcov/
 # Журналы и локальные артефакты
 *.log
 /graphify-out/
+/.ub-tools/
+/.metrics/
+/target/coverage/
+/target/mutation-workers/
 .DS_Store
 *.swp
 *.swo

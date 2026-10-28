@@ -89,6 +89,75 @@ class MeshCoreTests(unittest.IsolatedAsyncioTestCase):
             await self.radio.validate_channel(0)
 
 
+    async def test_channel_metadata_validation(self):
+        cases = [
+            None,
+            SimpleNamespace(type=gateway.EventType.ERROR, payload={}),
+            SimpleNamespace(type=gateway.EventType.CHANNEL_INFO, payload={"channel_name": "Другой"}),
+        ]
+        self.radio.radio.commands.get_channel = AsyncMock()
+        for result in cases:
+            with self.subTest(result=result):
+                self.radio.radio.commands.get_channel.return_value = result
+                with self.assertRaisesRegex(RuntimeError, "не настроен"):
+                    await self.radio.validate_channel(0)
+
+    async def test_select_channel_rejects_disconnected_or_unknown_channel(self):
+        self.radio.isConnected = threading.Event()
+        for connected, channel in ((False, 0), (True, 999)):
+            with self.subTest(connected=connected, channel=channel):
+                self.radio.isConnected.set() if connected else self.radio.isConnected.clear()
+                with self.assertRaisesRegex(RuntimeError, "недоступен"):
+                    await self.radio.select_channel(channel, {"offset": 1})
+
+        self.assertEqual(self.radio.channel, gateway.CHANNEL)
+
+    async def test_contacts_error_does_not_replace_existing_nodes(self):
+        self.radio.nodes = {"old": {"user": {"longName": "Старый"}}}
+        self.radio.radio.commands.get_contacts = AsyncMock(return_value=SimpleNamespace(type=gateway.EventType.ERROR))
+
+        with self.assertRaisesRegex(RuntimeError, "контакты"):
+            await self.radio.refresh_contacts()
+
+        self.assertIn("old", self.radio.nodes)
+
+    async def test_cache_expiry_boundary_keeps_newer_messages(self):
+        with patch.object(gateway, "time", SimpleNamespace(monotonic=lambda: 1000)):
+            await self.radio.on_message(self.event("Первое", timestamp=1))
+        with patch.object(gateway, "time", SimpleNamespace(monotonic=lambda: 1001)):
+            await self.radio.on_message(self.event("Второе", timestamp=2))
+        with patch.object(gateway, "time", SimpleNamespace(monotonic=lambda: 1300)):
+            await self.radio.on_message(self.event("Первое", timestamp=1))
+            await self.radio.on_message(self.event("Второе", timestamp=2))
+
+        self.assertEqual(self.messages.qsize(), 3)
+        self.assertEqual(list(self.radio.seen), [
+            (gateway.CHANNEL, 2, "Второе"),
+            (gateway.CHANNEL, 1, "Первое"),
+        ])
+
+    async def test_cache_capacity_evicts_oldest(self):
+        self.radio.seen.update(((gateway.CHANNEL, i, str(i)), 1000) for i in range(4096))
+        with patch.object(gateway, "time", SimpleNamespace(monotonic=lambda: 1000)):
+            await self.radio.on_message(self.event())
+
+        self.assertEqual(len(self.radio.seen), 4096)
+        self.assertNotIn((gateway.CHANNEL, 0, "0"), self.radio.seen)
+        self.assertIn((gateway.CHANNEL, 1, "1"), self.radio.seen)
+        self.assertIn((gateway.CHANNEL, 4095, "4095"), self.radio.seen)
+
+    async def test_empty_message_and_full_queue(self):
+        await self.radio.on_message(self.event(""))
+        self.assertTrue(self.messages.empty())
+        for i in range(200):
+            self.messages.put_nowait((gateway.CHANNEL, str(i)))
+
+        await self.radio.on_message(self.event("Переполнение"))
+
+        self.assertEqual(self.messages.qsize(), 200)
+        self.assertEqual(self.messages.get_nowait(), (gateway.CHANNEL, "0"))
+
+
 class ChannelCommandTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -233,6 +302,27 @@ class ChannelCommandTests(unittest.TestCase):
 
         self.assertEqual(selected, [0])
         self.assertEqual(json.loads(self.path.read_text()), {"offset": 19, "meshcore_channel": 0})
+
+
+    def test_numeric_channel_aliases_and_feedback(self):
+        for alias, channel in (("0", 0), ("1", gateway.CHANNEL), ("PUBLIC", 0), ("bridge", gateway.CHANNEL)):
+            with self.subTest(alias=alias):
+                self.reply.reset_mock()
+
+                gateway.handle_message(self.radio, self.message("/channel " + alias), self.state)
+
+                self.assertEqual(self.radio.channel, channel)
+                text = self.reply.call_args.args[0]
+                self.assertIn("Выбран канал " + gateway.CHANNELS[channel], text)
+                self.assertIn("общий радиоэфир Public" if channel == 0 else "идут в #tulameshbridge", text)
+
+    def test_status_uptime(self):
+        self.radio.nodes = {"node": {}}
+        with patch.object(gateway, "time", SimpleNamespace(monotonic=lambda: gateway.bridge.STARTED_AT + 61)):
+            text = gateway.status_text(self.radio)
+
+        self.assertIn("моста: 0 д 00:01:01", text)
+        self.assertIn("Известных контактов: 1", text)
 
 
 if __name__ == "__main__":
