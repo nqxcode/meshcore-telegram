@@ -8,6 +8,29 @@ Heltec V4.3 переведён на MeshCore USB Companion `v1.18.0-81dbae5`.
 На Android нужен отдельный узел с MeshCore Companion BLE и приложение MeshCore: задайте те же радиопараметры и добавьте канал по имени `#tulameshbridge`. Это канал с ключом, вычисляемым из имени, а не секретная группа.
 
 Зависимости нового моста установлены в `.meshcore-venv`; версии записаны в `requirements-meshcore.txt`.
+Пример настроек — [`bridge.env.example`](bridge.env.example). При первом запуске
+скопируйте его в `bridge.env` и ограничьте доступ:
+
+```sh
+cp -n bridge.env.example bridge.env
+chmod 600 bridge.env
+```
+
+Укажите в `bridge.env` токен от @BotFather, ID Telegram-группы и USB-порт узла.
+Файл `bridge.env` исключён из Git. Для ручного запуска из каталога проекта
+загрузите переменные в окружение:
+
+```sh
+set -a
+. ./bridge.env
+set +a
+.meshcore-venv/bin/python meshcore_bridge.py
+```
+
+При использовании systemd файл должен быть подключён через `EnvironmentFile=`
+в основном unit. Значения `MESHCORE_CHANNEL` и `MESHCORE_CHANNEL_NAME` также
+заданы в `meshcore-systemd.conf`; при настройке другого канала обновите их там.
+
 Для переключения существующего системного сервиса:
 
 ```sh
