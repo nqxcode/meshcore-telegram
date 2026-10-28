@@ -127,5 +127,37 @@ Offset Telegram, время попытки отправки и хеши неда
 Проверки без подключения к Telegram и радио:
 
 ```sh
-.meshcore-venv/bin/python -m unittest -v test_bridge.py test_meshcore_bridge.py
+.meshcore-venv/bin/python -m unittest -v test_bridge test_meshcore_bridge test_runtime
 ```
+
+Для измерения покрытия установите дополнительные зависимости разработки в то же
+окружение:
+
+```sh
+.meshcore-venv/bin/python -m pip install -r requirements-dev.txt
+mkdir -p target/coverage/python
+.meshcore-venv/bin/python -m coverage run --source=bridge,meshcore_bridge,configure_meshcore -m unittest test_bridge test_meshcore_bridge test_runtime
+.meshcore-venv/bin/python -m coverage report -m
+.meshcore-venv/bin/python -m coverage lcov -o target/coverage/python/lcov.info
+```
+
+Проверки `ub-mode` используют оригинальные инструменты
+[crapper](https://github.com/unclebob/crapper),
+[dryer](https://github.com/unclebob/dryer) и
+[mutator](https://github.com/unclebob/mutator). При локальной установке в
+`.ub-tools/venv` команды такие:
+
+```sh
+.ub-tools/venv/bin/crapper --use-existing-coverage --threshold 9.99 bridge.py meshcore_bridge.py configure_meshcore.py
+.ub-tools/venv/bin/dryer --threshold 0.8 bridge.py meshcore_bridge.py configure_meshcore.py
+.ub-tools/venv/bin/mutator --no-coverage --mutate-all --max-workers 2 --test-command '.meshcore-venv/bin/python -m unittest test_bridge test_meshcore_bridge test_runtime' bridge.py meshcore_bridge.py configure_meshcore.py
+```
+
+Перед `crapper` нужно заново получить покрытие. `dryer` выводит кандидаты на
+дублирование; код завершения 0 сам по себе не означает, что кандидатов нет.
+`mutator --no-coverage` проверяет все места мутаций, включая операторы в
+продолжениях строк, которые LCOV не всегда выделяет отдельно. Ключ `--mutate-all`
+отключает повторное использование результатов прошлых прогонов. Полный прогон
+мутаций выполняется в копиях файлов; тесты используют имитации радио и Telegram.
+
+Результаты применения навыка и причины изменений: [UB_MODE_REPORT.md](UB_MODE_REPORT.md).
