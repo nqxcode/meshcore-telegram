@@ -17,6 +17,60 @@ with patch.dict(os.environ, TELEGRAM_BOT_TOKEN="test", TELEGRAM_CHAT_ID="123"):
 
 
 class TelegramTests(unittest.TestCase):
+    def test_start_and_help_list_commands_without_radio_transmission(self):
+        for handler in (bridge.handle_message, gateway.handle_message):
+            for command in ("/start", "/start@mesh_bot welcome", "/help"):
+                for chat in ({"id": 42, "type": "private"}, {"id": bridge.CHAT_ID, "type": "supergroup"}):
+                    with self.subTest(handler=handler, command=command, chat=chat):
+                        interface = Mock()
+                        state = {"offset": 5}
+                        message = {
+                            "chat": chat,
+                            "from": {"id": 42},
+                            "text": command,
+                        }
+
+                        with (
+                            patch.object(bridge, "save_state") as save,
+                            patch.object(bridge, "bot_username", "mesh_bot"),
+                            patch.object(bridge, "telegram") as telegram,
+                        ):
+                            handler(interface, message, state)
+
+                        telegram.assert_called_once()
+                        self.assertEqual(telegram.call_args.args, ("sendMessage",))
+                        self.assertEqual(telegram.call_args.kwargs["chat_id"], 42)
+                        text = telegram.call_args.kwargs["text"]
+                        for entry in ("/start", "/help", "/status", "/nodes", "/send текст"):
+                            self.assertIn(entry, text)
+
+                        if handler is gateway.handle_message:
+                            for entry in ("/channels", "/channel public", "/channel bridge", gateway.CHANNEL_NAME):
+                                self.assertIn(entry, text)
+                        else:
+                            self.assertNotIn("/channel", text)
+
+                        interface.sendText.assert_not_called()
+                        save.assert_not_called()
+                        self.assertEqual(state, {"offset": 5})
+
+    def test_help_ignores_other_groups_bots_and_commands_for_other_bots(self):
+        messages = [
+            {"chat": {"id": 456, "type": "supergroup"}, "from": {"id": 42}, "text": "/start"},
+            {"chat": {"id": 42, "type": "private"}, "from": {"id": 42, "is_bot": True}, "text": "/start"},
+            {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/help@other_bot"},
+        ]
+        for handler in (bridge.handle_message, gateway.handle_message):
+            for message in messages:
+                with self.subTest(handler=handler, message=message):
+                    interface = Mock()
+
+                    with patch.object(bridge, "telegram") as telegram:
+                        handler(interface, message, {"offset": 5})
+
+                    telegram.assert_not_called()
+                    interface.sendText.assert_not_called()
+
     def test_request_returns_result_and_checks_http_status(self):
         response = Mock()
         response.json.return_value = {"ok": True, "result": [1, 2]}

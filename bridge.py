@@ -21,6 +21,16 @@ STARTED_AT = time.monotonic()
 DEDUP_SECONDS = 300
 OUTGOING_DEDUP_SECONDS = 1
 MAX_MESSAGE_BYTES = 180
+HELP_TEXT = (
+    "Доступные команды:\n"
+    "/start — показать список команд\n"
+    "/help — справка по командам\n"
+    "/status — подключение, канал и время работы\n"
+    "/nodes — известные узлы (доступность не проверена)\n"
+    "/send текст — отправить текст в радиосеть из настроенной группы\n"
+    "Обычный текст в группе также отправляется в радиосеть.\n"
+    "В личном чате доступны /start, /help, /status и /nodes."
+)
 
 API = f"https://api.telegram.org/bot{TOKEN}"
 messages = queue.Queue(maxsize=200)
@@ -230,7 +240,7 @@ def outgoing_body(message, command, parts, respond):
     return parts[1].strip()
 
 
-def handle_message(interface, message, state, status_provider=status_text):
+def handle_message(interface, message, state, status_provider=status_text, help_text=HELP_TEXT):
     parsed = parse_message(message)
     if parsed is None:
         return
@@ -238,8 +248,12 @@ def handle_message(interface, message, state, status_provider=status_text):
     command, parts = parsed
     chat = message.get("chat", {})
     if chat.get("id") != CHAT_ID:
-        if chat.get("type") != "private" or command not in ("/status", "/nodes"):
+        if chat.get("type") != "private" or command not in ("/start", "/help", "/status", "/nodes"):
             return
+
+    if command in ("/start", "/help"):
+        reply_to(message, help_text)
+        return
 
     if handle_query(interface, command, chat, status_provider):
         return

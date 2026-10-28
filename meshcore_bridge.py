@@ -16,6 +16,14 @@ import bridge
 CHANNEL = int(os.getenv("MESHCORE_CHANNEL", "1"))
 CHANNEL_NAME = os.getenv("MESHCORE_CHANNEL_NAME", "#tulameshbridge")
 CHANNELS = {0: "Public", CHANNEL: CHANNEL_NAME}
+HELP_TEXT = (
+    bridge.HELP_TEXT + "\n\nПросмотр каналов доступен в личке и группе:\n"
+    "/channels или /channel — текущий канал и варианты переключения\n"
+    "Переключение доступно в настроенной группе:\n"
+    "/channel public — переключить на Public\n"
+    f"/channel bridge — переключить на {CHANNEL_NAME}\n"
+    "Выбор канала общий для группы и меняет пересылку в обе стороны."
+)
 PUBLIC_SECRET = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
 
 
@@ -176,11 +184,8 @@ def status_text(interface):
 
 
 def handle_message(interface, message, state, status_provider=status_text):
-    if message.get("chat", {}).get("type") == "private":
-        bridge.handle_message(interface, message, state, status_provider)
-        return
-
-    if message.get("chat", {}).get("id") != bridge.CHAT_ID or message.get("from", {}).get("is_bot"):
+    chat = message.get("chat", {})
+    if chat.get("type") != "private" and chat.get("id") != bridge.CHAT_ID:
         return
 
     parsed = bridge.parse_message(message)
@@ -189,7 +194,7 @@ def handle_message(interface, message, state, status_provider=status_text):
 
     command, parts = parsed
     if command not in ("/channels", "/channel"):
-        bridge.handle_message(interface, message, state, status_provider)
+        bridge.handle_message(interface, message, state, status_provider, help_text=HELP_TEXT)
         return
 
     handle_channel_command(interface, message, state, command, parts)
@@ -201,9 +206,14 @@ def handle_channel_command(interface, message, state, command, parts):
         respond(
             f"Текущий канал: {CHANNELS[interface.channel]}\n"
             "/channel public — общий Public\n"
-            "/channel bridge — #tulameshbridge\n"
+            f"/channel bridge — {CHANNEL_NAME}\n"
+            "Переключайте канал в настроенной Telegram-группе.\n"
             "Выбор общий для всей Telegram-группы и меняет пересылку в обе стороны."
         )
+        return
+
+    if message.get("chat", {}).get("type") == "private":
+        respond("Переключайте канал в настроенной Telegram-группе: /channel public или /channel bridge.")
         return
 
     aliases = {"public": 0, "0": 0, "bridge": CHANNEL, str(CHANNEL): CHANNEL, CHANNEL_NAME.lower(): CHANNEL}

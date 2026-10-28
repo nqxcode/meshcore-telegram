@@ -268,12 +268,46 @@ class ChannelCommandTests(unittest.TestCase):
         self.radio.validate_channel.assert_not_awaited()
         self.assertEqual(self.state, {"offset": 17})
 
+    def test_private_channel_queries_show_current_channel_without_switching(self):
+        for command in ("/channels", "/channel", "/channels@mesh_bot", "/channel@mesh_bot"):
+            with self.subTest(command=command):
+                self.reply.reset_mock()
+                message = self.message(command)
+                message["chat"] = {"id": 42, "type": "private"}
+
+                gateway.handle_message(self.radio, message, self.state)
+
+                self.reply.assert_called_once()
+                self.assertEqual(self.reply.call_args.kwargs["chat_id"], 42)
+                text = self.reply.call_args.args[0]
+                self.assertIn(f"Текущий канал: {gateway.CHANNEL_NAME}", text)
+                self.assertIn("/channel public", text)
+                self.assertIn("/channel bridge", text)
+
+        self.radio.validate_channel.assert_not_awaited()
+        self.assertEqual(self.state, {"offset": 17})
+        self.assertFalse(self.path.exists())
+
+    def test_private_channel_switch_explains_group_requirement(self):
+        message = self.message("/channel public")
+        message["chat"] = {"id": 42, "type": "private"}
+
+        gateway.handle_message(self.radio, message, self.state)
+
+        self.reply.assert_called_once()
+        self.assertEqual(self.reply.call_args.kwargs["chat_id"], 42)
+        self.assertIn("в настроенной Telegram-группе", self.reply.call_args.args[0])
+        self.radio.validate_channel.assert_not_awaited()
+        self.assertEqual(self.state, {"offset": 17})
+        self.assertFalse(self.path.exists())
+
     def test_private_radio_commands_and_other_groups_are_ignored(self):
         cases = [
             ("/send Привет", "private", False),
             ("Привет", "private", False),
-            ("/channel public", "private", False),
-            ("/channels", "private", False),
+            ("/channel@other_bot", "private", False),
+            ("/channels", "private", True),
+            ("/channels", "group", False),
             ("/status@other_bot", "private", False),
             ("/status", "private", True),
             ("/status", "group", False),
@@ -297,7 +331,7 @@ class ChannelCommandTests(unittest.TestCase):
         ]
         selected = []
         with patch.object(gateway.bridge, "telegram", return_value=updates):
-            with patch.object(gateway.bridge, "handle_message", side_effect=lambda *args: selected.append(args[0].channel)):
+            with patch.object(gateway.bridge, "handle_message", side_effect=lambda *args, **kwargs: selected.append(args[0].channel)):
                 gateway.bridge.receive_telegram(self.radio, self.state, message_handler=gateway.handle_message)
 
         self.assertEqual(selected, [0])
